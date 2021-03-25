@@ -1,7 +1,5 @@
 #!/bin/sh
-cp mca66.py /usr/local/bin/mca66_server/
-cp mca66_server.py /usr/local/bin/mca66_server/
-cp zones_list.txt /usr/local/bin/mca66_server/
-cp sources_list.txt /usr/local/bin/mca66_server/
-
-
+cp nuvo.py /usr/local/bin/nuvo_server/
+cp nuvo_server.py /usr/local/bin/nuvo_server/
+cp zones_list.txt /usr/local/bin/nuvo_server/
+cp sources_list.txt /usr/local/bin/nuvo_server/
