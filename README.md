@@ -1,10 +1,9 @@
-# mca66
-This is the serial controller that implements a REST API for the Home Theater Direct MCA-66 Home Audio distribution amplifier. 
+# nuvo
+This is the serial controller that implements a REST API for the Nuvo Essentia NV-E6GXS Home Audio distribution amplifier. 
 
 # Files
-* zone_list.txt: This file is a text file containing the list of zone names
-* sources_list.txt: This file is a text file containing the list of source names
-* mca66.py: this is the class I wrote for the MCA-66 controller
-* mca66_server.py: this is the main python script you run - assumes the above files are in the same directory as this script
-* mca66_server.sh: I run this on a raspberry pi, so I use this in /etc/init.d/ so it will run at startup.  It assumes everything is installed in /usr/local/bin/mca66_server/
-
+* zone_list.txt: List of Zone names
+* sources_list.txt: List of Source names
+* nuvo.py: Python class for the Nuvo controller that handles the serial communication
+* nuvo_server.py: Python server that implements the RESET API.  NOTE: It assumes the above files are in the same directory as this script
+* nuvo_server.sh: Put this in /etc/init.d/ so it will run at startup.  NOTE: It assumes everything is installed in /usr/local/bin/nuvo_server/
