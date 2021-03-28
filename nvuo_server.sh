@@ -6,14 +6,14 @@
 # Required-Stop:     $remote_fs $syslog
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: MCA-66 Server
-# Description:       MCA-66 Server
+# Short-Description: Nuvo Server
+# Description:       Nuvo Server
 ### END INIT INFO
 
 # Change the next 3 lines to suit where you install your script and what you want to call it
-DIR=/usr/local/bin/mca66_server
-DAEMON=$DIR/mca66_server.py
-DAEMON_NAME=mca66_server
+DIR=/usr/local/bin/nuvo_server
+DAEMON=$DIR/nuvo_server.py
+DAEMON_NAME=nuvo_server
 
 # Add any command line options for your daemon here
 DAEMON_OPTS=""
