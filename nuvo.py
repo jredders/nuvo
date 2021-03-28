@@ -1,7 +1,7 @@
 from __future__ import absolute_import, division, print_function
 import serial, time, logging
 
-class MCA66:
+class NUVO:
     
     def __init__(self, device, to=1):
         logging.debug("Init...")
@@ -11,6 +11,7 @@ class MCA66:
         self.device = device
         self.to = 1
         self.zonelist = {k+1:{'power':None,'input':None,'vol':None,'mute':None,'input_name':None} for k in range(6)}
+    
     def __enter__(self):
         logging.debug("Enter...")
         self.open()
