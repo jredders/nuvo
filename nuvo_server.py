@@ -2,9 +2,9 @@
 
 from __future__ import print_function
 
-import web, mca66, sys, json, time, logging
+import web, nuvo, sys, json, time, logging
 
-logfile = '/var/log/mca66_server/server.log'
+logfile = '/var/log/nuvo_server/server.log'
 serial_port = '/dev/ttyUSB0'
 
 # set up logger
@@ -13,13 +13,13 @@ logging.basicConfig(filename=logfile,level=logging.DEBUG,
                     datefmt='%Y-%m-%d %H:%M:%S')
 
 
-# get the MCA66 object
-audio = mca66.MCA66(serial_port)
+# get the NUVO object
+audio = nuvo.NUVO(serial_port)
 
 # open the audio device - wait until we can reach it.  Most common reason - power is off on the Amp
-logging.info("Opening MCA66 at %s",serial_port)
+logging.info("Opening Nuvo at %s",serial_port)
 while audio.open() is False:
-    logging.warning("Could not open MCA-66 comm - is it on? Retrying in 15s...")
+    logging.warning("Could not open Nuvo comm - is it on? Retrying in 15s...")
     time.sleep(15)
 
 # define list of commands we handle
@@ -28,15 +28,15 @@ commands = ['allon','alloff','pwr','volup','voldwn','setvol','setinput','togglem
 # urls for the web app
 urls = (
     '/', 'index',
-    '/mca66', 'controller'
+    '/nuvo', 'controller'
 )
 
 # respond to /
 class index:
     def GET(self):
-        return "MCA-66 Home Audio System Controller"
+        return "Nuvo Home Audio System Controller"
 
-# respond to /mca66
+# respond to /nuvo
 class controller:
 
     def GET(self):
