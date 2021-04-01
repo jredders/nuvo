@@ -1,10 +1,7 @@
-#!/usr/bin/env python
-
-from __future__ import print_function
-
+#!/usr/bin/python3
 import web, nuvo, sys, json, time, logging
 
-logfile = '/var/log/nuvo_server/server.log'
+logfile = 'server.log'
 serial_port = '/dev/ttyUSB0'
 
 # set up logger
@@ -12,18 +9,11 @@ logging.basicConfig(filename=logfile,level=logging.DEBUG,
                     format='%(asctime)s %(levelname)s %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S')
 
-
-# get the NUVO object
-audio = nuvo.NUVO(serial_port)
-
-# open the audio device - wait until we can reach it.  Most common reason - power is off on the Amp
-logging.info("Opening Nuvo at %s",serial_port)
-while audio.open() is False:
-    logging.warning("Could not open Nuvo comm - is it on? Retrying in 15s...")
-    time.sleep(15)
+# get the Nuvo object
+nv = nuvo.Nuvo(serial_port)
 
 # define list of commands we handle
-commands = ['allon','alloff','pwr','volup','voldwn','setvol','setinput','togglemute','status','getzonelabels']
+commands = ['open','alloff','pwr','volup','voldwn','setvol','setinput','togglemute','status','getzonelabels']
             
 # urls for the web app
 urls = (
@@ -56,47 +46,47 @@ class controller:
                 value = int(user_data.value) if 'value' in user_data else None
 
                 # Process the commnads
-                if command == "status":
+                if command == "open":
+                    nv.open()
+                elif command == "status":
                     if zone:
-                        audio.queryZone(zone)
+                        nv.queryZone(zone)
                     else:
                         logging.error("Error - no zone specified.")
-                elif command == "allon":
-                    audio.setPower(0, 1)
                 elif command == "alloff":
-                    audio.setPower(0, 0)
+                    nv.allOff()
                 elif command == "pwr":
                     if zone and value is not None:
-                        audio.setPower(zone, value)
+                        nv.setPower(zone, value)
                     else:
                         loggin.error("Zone or Value not specified: Zone: %s, Value: %s",zone,value)
                 elif command == "volup":
                     if zone:
-                        audio.volUp(zone)
+                        nv.volUp(zone)
                     else:
                         logging.error("Error - no zone specified.")
                 elif command == "voldwn":
                     if zone:
-                        audio.volDwn(zone)
+                        nv.volDown(zone)
                     else:
                         logging.error("Error - no zone specified.")
                 elif command == "setvol":
                     if zone and value is not None:
-                        audio.setVol(zone, value)
+                        nv.setVol(zone, value)
                     else:
                         loggin.error("Zone or Value not specified: Zone: %s, Value: %s",zone,value)
                 elif command == "setinput":
                     if zone and value:
-                        audio.setInput(zone, value)
+                        nv.setSource(zone, value)
                     else:
                         loggin.error("Zone or Value not specified: Zone: %s, Value: %s",zone,value)
                 elif command == "togglemute":
                     if zone:
-                        audio.toggleMute(zone)
+                        nv.toggleMute(zone)
                     else:
                         logging.error("Error - no zone specified.")
                 elif command == "getzonelabels":
-                    return json.dumps(audio.getZoneNames())
+                    return json.dumps(nv.getZoneNames())
             else:
                 loggin.warning("Invalid command specified:", command)
         else:
@@ -105,10 +95,15 @@ class controller:
         # give the Amp time to reply 
         time.sleep(0.5)
         
-        return json.dumps(audio.status())
-    
+        return json.dumps(nv.status())
 
 if __name__ == "__main__":
+
+    # open the Nuvo device - wait until we can reach it.  Most common reason - power is off on the Amp
+    #logging.info("Opening Nuvo at %s", serial_port)
+    #while nv.open() is False:
+    #    logging.warning("Could not open Nuvo comm - is it on? Retrying in 15s...")
+    #    time.sleep(15)
 
     app = web.application(urls, globals())
     app.run()
