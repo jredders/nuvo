@@ -1,162 +1,358 @@
 from __future__ import absolute_import, division, print_function
-import serial, time, logging
+import re, serial, time, logging
 
-class NUVO:
+class Nuvo:
     
     numSources = 6
-    numZones   = 12
-    
+    numZones = 12
+
+    #VER"DEV FWvx.xx HWvx"
+    verre = re.compile(r'#VER"(?P<device>[A-Za-z0-9-]+) '
+                       r'FWv(?P<fw>[0-9.]+) '
+                       r'HWv(?P<hw>[0-9]+)"')
+
+    #SCFGx,ENABLE0
+    #SCFGx,ENABLE1,NAME"Source Name",GAINx,NUVONETx,SHORTNAME"XYZ"
+    scfgre = re.compile(r'#SCFG(?P<source>[1-6]),'
+                        r'ENABLE(?P<enabled>[01])(?:,'
+                        r'NAME"(?P<name>[A-Za-z0-9\'_ ]+)",'
+                        r'GAIN(?P<gain>[0-9]+),'
+                        r'NUVONET(?P<nuvonet>[01]),'
+                        r'SHORTNAME"(?P<shortname>[A-Z]+)"|)')
+
+    #ZCFGx,ENABLE0
+    #ZCFGx,ENABLE1,NAME"Zone Name",SLAVETOx,GROUPx,SOURCESx,XSRCx,IRx,DNDx,LOCKEDx
+    zcfgre = re.compile(r'#ZCFG(?P<zone>[0-9]+),'
+                        r'ENABLE(?P<enabled>[01])(?:,'
+                        r'NAME"(?P<name>[A-Za-z0-9\'_ ]+)",'
+                        r'SLAVETO(?P<slaveto>[0-9]+),'
+                        r'GROUP(?P<group>[0-9]+),'
+                        r'SOURCES(?P<sources>[0-9]+),'
+                        r'XSRC(?P<xsrc>[01]),'
+                        r'IR(?P<ir>[012]),'
+                        r'DND(?P<dnd>[0-7]),'
+                        r'LOCKED(?P<locked>[01])|)')
+    #Zx,OFF
+    #Zx,ON,SRCx,VOLx,DNDx,LOCKx
+    zre = re.compile(r'#Z(?P<zone>[0-9]+),'
+                     r'(?P<power>ON|OFF)(?:,'
+                     r'SRC(?P<source>[1-6]),'
+                     r'(?:VOL|)(?P<volume>(?:[0-9]+|MUTE)),'
+                     r'DND(?P<dnd>[01]),'
+                     r'LOCK(?P<locked>[01])|)')
+
     def __init__(self, device, to = 1):
-        logging.debug("Nuvo: Init...")
+        logging.debug("init...")
+        self.asleep = True
         self.device = device
         self.to = to
-        self.sources = {k+1:{'enabled':False, 'name':None} for k in range(numSources)}
-        self.zones   = {k+1:{'enabled':False, 'name':None, 'power':None, 'source':None, 'volume':None, 'muted':None, 'dnd':None, 'locked':None} for k in range(numZones)}
+        self.sources = {k+1:{'enabled':False, 'name':None} for k in range(self.numSources)}
+        self.zones   = {k+1:{'enabled':False, 'name':None, 'slaveto':None, 'power':None, 'source':None, 'volume':None, 'muted':None} for k in range(self.numZones)}
 
     def __enter__(self):
-        logging.debug("Nuvo: Enter...")
+        logging.debug("enter...")
         self.open()
         return self
         
     def __exit__(self, type, value, traceback):
-        logging.debug("Nuvo: Exit...")
+        logging.debug("exit...")
         self.ser.close()
         
     def open(self):
         self.ser = serial.Serial(port = self.device, baudrate = 57600, timeout = self.to)
         self.ser.flushInput()
         if self.commCheck() == True:
-            self.getZoneInfo(self)
-            self.getSourceInfo(self)
+            self.getSourceInfo()
+            self.getZoneInfo()
             return True
         else:
-            return False
-        
-    def commCheck(self):
-        # Send 33 CRs to make sure Novo is awake
-        self.ser.write(b'\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r')
-        # Send *VER command
-        self.ser.write(b'*VER\r')
-        rsp = self.ser.readline.decode("utf-8")
-        if len(rsp) == 25 and rsp == '#VER"NV-E6G FWv2.66 HWv0"':
-            logging.debug("commCheck: Nuvo E6G detected. Received: %s", str(rsp))
-            return True
-        else:
-            logging.warning("commCheck: Nuvo E6G not detected. Received %s", str(rsp))
             return False
     
-    def getZoneNames(self):
-        self.getZoneInfo(self)
-        return {k+1:self.zones[k+1]["name"] for k in range(numZones)}
+    def wakeNuvo(self):
+        """Sends CR and pauses 5 ms to make sure Novo is awake"""
+        logging.debug("wakeNuvo...")
+        self.ser.write(b'\r')
+        time.sleep(0.05)
+        self.asleep = False
+    
+    def parseResponse(self, rsp):
+        """Parses response"""
+        m = self.verre.match(rsp)
+        if m:
+            logging.debug("parseResponse: #VER match")
+            if m.group('device') == 'NV-E6G':
+                logging.debug("Nuvo E6G detected. Received: %s", rsp)
+                return True
+            else:
+                logging.warning("Nuvo E6G not detected. Received %s", rsp)
+                return False
 
-    def getZoneNames(self)
-        self.getSourceInfo(self)
-        return {k+1:self.soures[k+1]["name"] for k in range(numSources)}
-    
-    def getZoneInfo(self):
-        for zone in self.zones.keys():
-          self.sendCommand(b'*Z{zone}STATUS?\r')
+        m = re.match(r'#ALLOFF', rsp)
+        if m:
+            logging.debug("parseResponse: #ALLOFF match %s", rsp)
+            self.asleep = True
+            return True
         
-    def getSourceInfo(self):
-        for source in self.sources.keys():
-          self.sendCommand(b'*SCFG{source}STATUS?\r')
+        m = self.zre.match(rsp)
+        if m:
+            logging.debug("parseResponse: #Z match %s", rsp)
+            zone = int(m.group('zone'))
+            self.zones[zone]['power'] = m.group('power')
+            if m.group('power') == 'ON':
+                self.zones[zone]['source'] = int(m.group('source'))
+                if m.group('volume') == 'MUTE':
+                    self.zones[zone]['muted'] = True
+                else:
+                    self.zones[zone]['volume'] = 79 - int(m.group('volume'))
+                    self.zones[zone]['muted'] = False
+            return True
         
-    def printZone(self, zone):
-        logging.debug("Zone: %s", zone)
-        logging.debug("Enabled: %s", self.zones[zone]["enabled"])
-        logging.debug("Name: %s", self.zones[zone]['name'])
-        logging.debug("Source: %s: %s", self.zones[zone]['source'], self.sources[self.zones[zone]['source']]['name'])
-        logging.debug("Volume: %s", self.zones[zone]['volume'])
-        logging.debug("Muted: %s", self.zones[zone]['muted'])
-        logging.debug("DND: %s", self.zones[zone]['dnd'])
-        logging.debug("Locked: %s", self.zones[zone]['locked'])        
+        m = self.scfgre.match(rsp)
+        if m:
+            logging.debug("parseResponse: #SCFG match %s", rsp)
+            source = int(m.group('source'))
+            if m.group('enabled') == '1':
+                self.sources[source]['enabled'] = True
+            else:
+                self.sources[source]['enabled'] = False
+            self.sources[source]['name'] = m.group('name')
+            return True
+
+        m = self.zcfgre.match(rsp)
+        if m:
+            logging.debug("parseResponse: #ZCFG match %s", rsp)
+            zone = int(m.group('zone'))
+            if m.group('enabled') == '1':
+                self.zones[zone]['enabled'] = True
+            else:
+                self.zones[zone]['enabled'] = False
+            self.zones[zone]['name'] = m.group('name')
+            if m.group('slaveto') != '0':
+                self.zones[zone]['slaveto'] = int(m.group('slaveto'))
+            return True
+        
+        loggin.warning("parseResponse no match %s", rsp)
+        return False
 
     def sendCommand(self, cmd):
-        self.ser.write(cmd)
-        self.getReply() 
+        """Makes sure the Nuvo is awake and converts the cmd string to bytes and sends it"""
+        # Parse any waiting responses
+        while self.ser.in_waiting:
+            logging.debug("sendCommand: Unsolicited response received")
+            rsp = self.ser.readline().decode('ascii').rstrip()
+            self.parseResponse(rsp)
 
-    def getReply(self):
-        msg_count = 0
-        time.sleep(0.05)
-        while self.ser.inWaiting() > 0:
-            reply = bytearray(self.ser.readline.decode("utf-8"))    
-            if len(reply) == 0:
-                break
-                
-            msg_count = msg_count + 1
-            self.parseReply(reply)
+        if self.asleep == True:
+            self.wakeNuvo()
+            
+        logging.debug("sendCommand: Sending *%s", cmd)
+        self.ser.write(b'*' + bytes(cmd, 'ascii') + b'\r')
+        rsp = self.ser.readline().decode('ascii').rstrip()
+        return self.parseResponse(rsp)
 
-        return msg_count
-
-    def parseReply(self, message):
-        zone = message[2]
-        self.zones[zone]['power'] = "on" if (message[4] & 1<<7)>>7 else "off"
-        self.zones[zone]['source'] = message[8]+1
-        self.zones[zone]['volume'] = message[9]-195 if message[9] else 0
-        self.zones[zone]['muted'] = "on" if (message[4] & 1<<6)>>6 else "off"
-
-    def setSource(self, zone, source):
-        if zone not in range(1, numZones):
-            logging.warning("Invalid Zone")
-            return
-        if source not in range(1, numSources):
-            logging.warning("invalid Source")
-            return
-        self.sendCommand(b'*Z{zone}SRC{source}\r')
+    def commCheck(self):
+        """Checks for communication with the Nuvo by asking for the version"""
+        logging.debug("commCheck...")
+        return self.sendCommand(f'VER')
     
-    def volUp(self, zone):
-        if zone not in range(1, numZones):
-            logging.warning("Invalid Zone")
-            return    
-        self.sendCommand(b'*Z{zone}VOL+\r')
+    def getSourceInfo(self):
+        """Updates the sources dictionary based on the output of the SCFG command sent to all sources"""
+        logging.debug("getSourceInfo...")
+        for source in self.sources.keys():
+            self.sendCommand(f'SCFG{source}STATUS?')
 
-    def volDwn(self, zone):
-        if zone not in range(1, numZones):
-            logging.warning("Invalid Zone")
-            return    
-        self.sendCommand(b'*Z{zone}VOL-\r')
+    def getZoneInfo(self):
+        """Updates the zones dictionary based on the output of the ZCFG and ZON commands sent to all zones"""
+        logging.debug("getZoneInfo...")
+        for zone in self.zones.keys():
+            self.sendCommand(f'ZCFG{zone}STATUS?')
+            # Need Zone on to get most details
+            self.sendCommand(f'Z{zone}ON')
+        self.sendCommand(f'ALLOFF')
 
-    def setVol(self, zone, volume):
-        if volume not in range(0, 79):
-            logging.warning("Invald Volume")
-            return
-        self.sendCommand(b'Z{zone}VOL{volume}\r')
-
-    def setMute(self, zone, mute):
-        if zone not in range(1, numZones):
-            logging.warning("Invalid Zone")
-            return
-        if mute not in [0,1]:
-            logging.warning("Invalid Mute")
-            return
-        if mute == 0:
-            self.sendCommand(b'*Z{zone}MUTEOFF\r')
-        else:
-            self.sendCommand(b'*Z{zone}MUTEON\r')
-
-    def toggleMute(self, zone):
-        if zone not in range(1, numZones):
-            logging.warning("Invalid Zone")
-            return    
-        self.sendCommand(b'*Z{zone}MUTE\r')
-
-    def queryZone(self, zone):
-        if zone not in range(1, numZones):
-            logging.warning("Invalid Zone")
-            return
-        self.sendCommand(b'*Z{zone}STATUS?\r')
-
-    def setPower(self, zone, power):
-        if zone not in range(1, numZones):
-            logging.warning("Invalid Zone")
-            return
-        if power not in [0, 1]:
-            logging.warning("Invalid Power")
-            return
-        if power == 0:
-            self.sendCommand(b'*Z{zone}OFF\r')
-        else:
-            self.sendCommand(b'*Z{zone}ON\r')
+    def getSourceNames(self):
+        """Returns a dictionary of Source#:SourceName pairs"""    
+        logging.debug("getSourceNames...")
+        return {k+1:self.sources[k+1]['name'] for k in range(self.numSources)}
+    
+    def getZoneNames(self):
+        """Returns a dictionary of Zone#:Zone Name pairs"""
+        logging.debug("getZoneNames...")
+        return {k+1:self.zones[k+1]['name'] for k in range(self.numZones)}
 
     def status(self):
+        """Returns a dictionary of all Zones"""
         return self.zones
+
+    def zoneOutOfRange(self, zone):
+        """Returns True and logs a warning if Zone is out of range"""
+        if zone not in range(1, self.numZones+1):
+            logging.warning("%s: Zone %s out of range", sys._getframe().f_back.f_code.co_name, zone)
+            return True
+
+    def sourceOutOfRange(self, source):
+        """Returns True and logs a warning if Source is out of range"""
+        if source not in range(1, self.numSources+1):
+            logging.warning("%s: Source %s out of range", sys._getframe().f_back.f_code.co_name, source)
+            return True
+
+    def getSourceName(self, zone):
+        """Returns Zone's source name"""
+        if self.zoneOutOfRange(zone):
+            return
+        return self.sources[self.getSource(zone)]['name']
+        
+    def getZoneName(self, zone):
+        """Returns Zone's name"""
+        if self.zoneOutOfRange(zone):
+            return
+        return self.zones[zone]['name']
+
+    def getZoneSlave(self, zone):
+        """Returns the slaved Zone if it exists or None"""
+        if self.zoneOutOfRange(zone):
+            return
+        return self.zones[zone]['slaveto']
+
+    def getCmdZone(self, zone):
+        """Returns the Zone where the command needs to be sent"""
+        if self.zoneOutOfRange(zone):
+            return
+        if self.getZoneSlave(zone):
+            return self.getZoneSlave(zone)
+        else:
+            return zone
+        
+    def printZone(self, zone):
+        """Prints dictionary of Zone and if slaved, the zone it's slaved to"""
+        if self.zoneOutOfRange(zone):
+            return
+        name = self.getZoneName(zone)
+        if self.getZoneSlave(zone):
+            slvnum  = self.getZoneSlave(zone)
+            slvname = self.getZoneName(slvnum)
+            slaved  = f" SLV{slvnum}:{slvname}"
+        else:
+            slaved = ""
+        if self.getPower(zone) == 1:
+            power = " ON"
+        else:
+            power = " OFF"
+        srcnum  = self.getSource(zone)
+        srcname = self.getSourceName(zone)
+        source  = f" SRC{srcnum}:{srcname}"
+        volnum  = self.getVol(zone)
+        volume  = f" VOL:{volnum}"
+        if self.getMute(zone) == 1:
+            muted = " MUTED"
+        else:
+            muted = ""
+        print(f"Zone {zone}: {name}{power}{slaved}{source}{volume}{muted}")
+
+    def queryZone(self, zone):
+        """Commands the Nuvo to refresh Zone's status, then prints it"""
+        if self.zoneOutOfRange(zone):
+            return
+        self.sendCommand(f'Z{zone}STATUS?')
+        self.printZone(zone)
+
+    def getPower(self, zone):
+        """Returnes the Zone's power status 1/0"""
+        if self.zoneOutOfRange(zone):
+            return
+        zone = self.getCmdZone(zone)
+        if self.zones[zone]['power'] == 'ON':
+            return 1
+        else:
+            return 0
+
+    def setPower(self, zone, power):
+        """"Commands the Nuvo to set the Zone's power status"""
+        if self.zoneOutOfRange(zone):
+            return
+        if power not in [0, 1]:
+            logging.warning("setPower: Power %s is invalid", power)
+            return
+        zone = self.getCmdZone(zone)
+        if power == 1:
+            self.sendCommand(f'Z{zone}ON')
+        else:
+            self.sendCommand(f'Z{zone}OFF')
+
+    def getSource(self, zone):
+        """Returns Zone's source"""
+        if self.zoneOutOfRange(zone):
+            return
+        zone = self.getCmdZone(zone)
+        return self.zones[zone]['source']
+
+    def setSource(self, zone, source):
+        """Commands Nuvo to set the Zone's source"""
+        if self.zoneOutOfRange(zone):
+            return
+        if self.sourceOutOfRange(source):
+            return
+        zone = self.getCmdZone(zone)
+        self.sendCommand(f'Z{zone}SRC{source}')
+
+    def getVol(self, zone):
+        """Returns the Zone's volume"""
+        if self.zoneOutOfRange(zone):
+            return
+        zone = self.getCmdZone(zone)
+        return self.zones[zone]['volume']
+
+    def setVol(self, zone, volume):
+        """Commands the Nuvo to set the Zone's volume"""
+        if self.zoneOutOfRange(zone):
+            return
+        if volume not in range(0, 80):
+            logging.warning("setVol: Volume %s out of range", volume)
+            return
+        zone = self.getCmdZone(zone)
+        volume = 79 - volume
+        self.sendCommand(f'Z{zone}VOL{volume}')
+
+    def volUp(self, zone):
+        """Commands the Nuvo to increase the Zone's volume"""
+        if self.zoneOutOfRange(zone):
+            return
+        zone = self.getCmdZone(zone)
+        self.sendCommand(f'Z{zone}VOL+')
+
+    def volDown(self, zone):
+        """Commands the Nuvo to decrease the Zone's volume"""
+        if self.zoneOutOfRange(zone):
+            return
+        zone = self.getCmdZone(zone)
+        self.sendCommand(f'Z{zone}VOL-')
+
+    def getMute(self, zone):
+        """Returns the Zone's muted status 1/0"""
+        if self.zoneOutOfRange(zone):
+            return
+        zone = self.getCmdZone(zone)
+        if self.zones[zone]['muted']:
+            return 1
+        else:
+            return 0
+
+    def setMute(self, zone, mute):
+        """Commands the Nuvo to set the Zone's muted status"""
+        if self.zoneOutOfRange(zone):
+            return
+        if mute not in [0,1]:
+            logging.warning("setMute: Mute %s is invalid", mute)
+            return
+        zone = self.getCmdZone(zone)
+        if mute == 1:
+            self.sendCommand(f'Z{zone}MUTEON')
+        else:
+            self.sendCommand(f'Z{zone}MUTEOFF')
+        
+    def toggleMute(self, zone):
+        """Commands the Nuvo to toggle the Zone's muted status"""
+        if self.zoneOutOfRange(zone):
+            return
+        zone = self.getCmdZone(zone)
+        self.sendCommand(f'Z{zone}MUTE')
