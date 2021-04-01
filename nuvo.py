@@ -1,5 +1,5 @@
 from __future__ import absolute_import, division, print_function
-import re, serial, time, logging
+import re, serial, time, logging, threading
 
 class Nuvo:
     
@@ -11,6 +11,9 @@ class Nuvo:
                        r'FWv(?P<fw>[0-9.]+) '
                        r'HWv(?P<hw>[0-9]+)"')
 
+    #ALLOFF
+    alloffre = re.compile(r'#ALLOFF')
+    
     #SCFGx,ENABLE0
     #SCFGx,ENABLE1,NAME"Source Name",GAINx,NUVONETx,SHORTNAME"XYZ"
     scfgre = re.compile(r'#SCFG(?P<source>[1-6]),'
@@ -43,9 +46,9 @@ class Nuvo:
 
     def __init__(self, device, to = 1):
         logging.debug("init...")
-        self.asleep = True
-        self.device = device
-        self.to = to
+        self.asleep  = True
+        self.device  = device
+        self.to      = to
         self.sources = {k+1:{'enabled':False, 'name':None} for k in range(self.numSources)}
         self.zones   = {k+1:{'enabled':False, 'name':None, 'slaveto':None, 'power':None, 'source':None, 'volume':None, 'muted':None} for k in range(self.numZones)}
 
@@ -62,6 +65,8 @@ class Nuvo:
         self.ser = serial.Serial(port = self.device, baudrate = 57600, timeout = self.to)
         self.ser.flushInput()
         if self.commCheck() == True:
+            x = threading.Thread(target=self.respLoop, daemon=True)
+            x.start()
             self.getSourceInfo()
             self.getZoneInfo()
             return True
@@ -79,15 +84,15 @@ class Nuvo:
         """Parses response"""
         m = self.verre.match(rsp)
         if m:
-            logging.debug("parseResponse: #VER match")
+            logging.debug("parseResponse: #VER match %s", rsp)
             if m.group('device') == 'NV-E6G':
-                logging.debug("Nuvo E6G detected. Received: %s", rsp)
+                logging.debug("Nuvo E6G detected")
                 return True
             else:
-                logging.warning("Nuvo E6G not detected. Received %s", rsp)
+                logging.warning("Nuvo E6G not detected")
                 return False
 
-        m = re.match(r'#ALLOFF', rsp)
+        m = self.alloffre.match(rsp)
         if m:
             logging.debug("parseResponse: #ALLOFF match %s", rsp)
             self.asleep = True
@@ -131,29 +136,34 @@ class Nuvo:
                 self.zones[zone]['slaveto'] = int(m.group('slaveto'))
             return True
         
-        loggin.warning("parseResponse no match %s", rsp)
+        logging.warning("parseResponse no match %s", rsp)
         return False
 
     def sendCommand(self, cmd):
         """Makes sure the Nuvo is awake and converts the cmd string to bytes and sends it"""
-        # Parse any waiting responses
-        while self.ser.in_waiting:
-            logging.debug("sendCommand: Unsolicited response received")
-            rsp = self.ser.readline().decode('ascii').rstrip()
-            self.parseResponse(rsp)
-
         if self.asleep == True:
             self.wakeNuvo()
-            
         logging.debug("sendCommand: Sending *%s", cmd)
         self.ser.write(b'*' + bytes(cmd, 'ascii') + b'\r')
-        rsp = self.ser.readline().decode('ascii').rstrip()
-        return self.parseResponse(rsp)
+        # Limit Sends to once every 50 ms
+        time.sleep(0.05)
 
+    def respLoop(self):
+        """Response parsing loop run in a separate thread"""
+        while True:
+            if self.ser.in_waiting:
+                rsp = self.ser.readline().decode('ascii').rstrip()
+                self.parseResponse(rsp)
+            
+            # Pause for 5 ms to let other threads do their thing
+            time.sleep(0.005)
+            
     def commCheck(self):
         """Checks for communication with the Nuvo by asking for the version"""
         logging.debug("commCheck...")
-        return self.sendCommand(f'VER')
+        self.sendCommand(f'VER')
+        rsp = self.ser.readline().decode('ascii').rstrip()
+        return self.parseResponse(rsp)
     
     def getSourceInfo(self):
         """Updates the sources dictionary based on the output of the SCFG command sent to all sources"""
@@ -182,7 +192,15 @@ class Nuvo:
 
     def status(self):
         """Returns a dictionary of all Zones"""
-        return self.zones
+        zonelist = {}
+        for zone in range(1, self.numZones+1):
+            zonelist[zone] = {}
+            zonelist[zone]['power'] = "on" if self.getPower(zone) == 1 else "off"
+            zonelist[zone]['input'] = self.getSource(zone)
+            zonelist[zone]['input_name'] = self.getSourceName(self.getSource(zone))
+            zonelist[zone]['vol'] = self.getVol(zone)
+            zonelist[zone]['mute'] = "on" if self.getMute(zone) == 1 else "off"
+        return zonelist
 
     def zoneOutOfRange(self, zone):
         """Returns True and logs a warning if Zone is out of range"""
@@ -227,27 +245,18 @@ class Nuvo:
         """Prints dictionary of Zone and if slaved, the zone it's slaved to"""
         if self.zoneOutOfRange(zone):
             return
-        name = self.getZoneName(zone)
-        if self.getZoneSlave(zone):
-            slvnum  = self.getZoneSlave(zone)
-            slvname = self.getZoneName(slvnum)
-            slaved  = f" SLV{slvnum}:{slvname}"
-        else:
-            slaved = ""
-        if self.getPower(zone) == 1:
-            power = " ON"
-        else:
-            power = " OFF"
+        name    = self.getZoneName(zone)
+        slvnum  = self.getZoneSlave(zone)
+        slvname = self.getZoneName(slvnum) if slvnum else ""
+        slaved  = f" SLV{slvnum:2}:{slvname:20}" if slvnum else ""
+        power   = " ON" if self.getPower(zone) == 1 else " OFF"
         srcnum  = self.getSource(zone)
         srcname = self.getSourceName(zone)
-        source  = f" SRC{srcnum}:{srcname}"
+        source  = f" SRC{srcnum}:{srcname:20}"
         volnum  = self.getVol(zone)
-        volume  = f" VOL:{volnum}"
-        if self.getMute(zone) == 1:
-            muted = " MUTED"
-        else:
-            muted = ""
-        print(f"Zone {zone}: {name}{power}{slaved}{source}{volume}{muted}")
+        volume  = f" VOL:{volnum:2}"
+        muted   = " MUTED" if self.getMute(zone) == 1 else ""
+        print(f"Zone {zone:2}:{name:20}{power:4}{volume}{muted:6}{source}{slaved}")
 
     def queryZone(self, zone):
         """Commands the Nuvo to refresh Zone's status, then prints it"""
@@ -278,6 +287,10 @@ class Nuvo:
             self.sendCommand(f'Z{zone}ON')
         else:
             self.sendCommand(f'Z{zone}OFF')
+
+    def allOff(self):
+        """Command Nuvo to turn off all Zones"""
+        self.sendCommand(f'ALLOFF')
 
     def getSource(self, zone):
         """Returns Zone's source"""
