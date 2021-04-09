@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 import logging, nuvo, web, time, json
 
-logfile = 'server.log'
+logfile = 'nuvo_server.log'
 serial_port = '/dev/ttyUSB0'
 
 # set up logger
