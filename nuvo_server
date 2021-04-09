@@ -1,7 +1,7 @@
 #!/bin/sh
 
 ### BEGIN INIT INFO
-# Provides:          myservice
+# Provides:          nuvo_server
 # Required-Start:    $remote_fs $syslog
 # Required-Stop:     $remote_fs $syslog
 # Default-Start:     2 3 4 5
@@ -54,10 +54,9 @@ case "$1" in
         ;;
 
     *)
-        echo "Usage: /etc/init.d/$DAEMON_NAME {start|stop|restart|status}"
+        echo "Usage: /etc/init.d/$DAEMON_NAME {start|stop|restart|reload|force-reload|status}"
         exit 1
         ;;
 
 esac
 exit 0
-
