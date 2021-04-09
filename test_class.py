@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-import nuvo, time, logging
+import logging, nuvo, time
 
 logfile = 'test.log'
 serial_port = '/dev/ttyUSB0'
@@ -22,7 +22,7 @@ while nv.open() is False:
 print(nv.getSourceNames())
 print(nv.getZoneNames())
 print(nv.status())
-time.sleep(5)
+time.sleep(20)
 
 # Run through functions on 3 Zones: 3 = Normal, 11 = Slaved, 69 = Invalid
 for zone in [3, 11, 69]:
@@ -62,31 +62,30 @@ for zone in [3, 11, 69]:
     nv.printZone(zone)
 
     print(f"\nMute = {nv.getMute(zone)}")
-    print(f"Muting Zone {zone}")
+    print(f"Muting")
     nv.setMute(zone, 1)
     nv.printZone(zone)
 
-    print(f"Unuting Zone {zone}")
+    print(f"Unuting")
     nv.setMute(zone, 0)
     nv.printZone(zone)
 
-    print(f"Toggline Mute on Zone {zone}")
+    print(f"Toggline Mute")
     nv.toggleMute(zone)
     nv.printZone(zone)
 
-    print(f"Toggline Mute on Zone {zone}")
+    print(f"Toggline Mute")
     nv.toggleMute(zone)
     nv.printZone(zone)
     
-    print("Turning off Zone {zone}")
+    print("Turning off Zone")
     nv.setPower(zone, 0)
     nv.printZone(zone)
     
-    time.sleep(5)
-
 # Put in an endless loop to check that updates from Zones are handled properly
 while True:
     print("\033[2J")
-    for zone in range(nv.numZones):
-        nv.printZone(zone+1)
+    nv.queryZone(1)
+    for zone in range(1, nv.numZones+1):
+        nv.printZone(zone)
     time.sleep(1)
